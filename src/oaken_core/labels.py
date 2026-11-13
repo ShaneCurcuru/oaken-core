@@ -10,6 +10,11 @@ the actor are logged. A write that changes nothing writes nothing and logs nothi
 Keys must be registered first. Core reserves ``queue``, ``priority`` and ``confidential``; a plugin
 may write them but not define them. A bad write raises ``LabelError`` (the host disables a plugin
 that causes one).
+
+``confidential`` only rises in the machine layer: once it is ``true`` there, no rule, plugin or core
+write can set it back to ``false`` and no machine-layer clear removes it (a retriage keeps it, so a
+remote triager never sees the item). Lowering it is a person's decision, made in the human layer and
+logged like any other. Only dropping the subject outright (a rejected intake item) removes it.
 """
 
 import re
@@ -22,8 +27,11 @@ from oaken_core.changelog import ChangeLog
 from oaken_core.clock import Clock, fmt_ts
 from oaken_core.db import Database
 from oaken_core.errors import OakenError
+from oaken_core.logging import get_logger
 
 KEY = re.compile(r"^[a-z][a-z0-9_.]{0,63}$")
+CONFIDENTIAL = "confidential"
+log = get_logger(__name__)
 
 
 class LabelError(OakenError):
@@ -160,6 +168,9 @@ class LabelStore:
             old = row["value"] if row else None
             if old == value:
                 return False
+            if key == CONFIDENTIAL and layer == MACHINE and old == "true":  # only a person lowers it
+                log.warning("confidential stays true: a machine write may not lower it", subject=subject_id, actor=f"{actor.kind}:{actor.label}", value=value)
+                return False
             await tx.execute(
                 "INSERT INTO labels (subject_id, key, layer, value, actor_kind, actor, at)"
                 " VALUES (?,?,?,?,?,?,?) ON CONFLICT (subject_id, key, layer) DO UPDATE SET"
@@ -210,16 +221,17 @@ class LabelStore:
         """Remove the person's value so the machine's shows again. This is the unlock."""
         return bool(await self._clear(subject_id, HUMAN, actor, key))
 
-    async def clear_machine(self, subject_id: str, actor: Actor, key: str | None = None) -> int:
+    async def clear_machine(self, subject_id: str, actor: Actor, key: str | None = None, *, drop_confidential: bool = False) -> int:
         """Remove machine values (one key, or all of the subject's), keeping the human layer.
-        Used by a retriage. Returns how many were removed."""
-        return await self._clear(subject_id, MACHINE, actor, key)
+        Used by a retriage. A ``confidential`` of ``true`` stays unless ``drop_confidential`` (the
+        subject itself is going away). Returns how many were removed."""
+        return await self._clear(subject_id, MACHINE, actor, key, keep_confidential=not drop_confidential)
 
     async def clear_human_all(self, subject_id: str, actor: Actor) -> int:
         """Remove every human value of a subject (a rejected intake item must leave nothing)."""
         return await self._clear(subject_id, HUMAN, actor, None)
 
-    async def _clear(self, subject_id: str, layer: str, actor: Actor, key: str | None) -> int:
+    async def _clear(self, subject_id: str, layer: str, actor: Actor, key: str | None, *, keep_confidential: bool = False) -> int:
         async with self.db.transaction() as tx:
             sql = "SELECT key, value FROM labels WHERE subject_id = ? AND layer = ?"
             args: list[str] = [subject_id, layer]
@@ -230,6 +242,8 @@ class LabelStore:
             if key is not None:
                 self.maker.check_writer(key, actor)
             rows = [r for r in rows if self.maker.get(r["key"]).may_write(actor)]  # a sweep leaves a guarded key alone
+            if keep_confidential:  # it only rises: a machine clear leaves a true one in place
+                rows = [r for r in rows if not (r["key"] == CONFIDENTIAL and r["value"] == "true")]
             for r in rows:
                 await tx.execute(
                     "DELETE FROM labels WHERE subject_id = ? AND key = ? AND layer = ?",

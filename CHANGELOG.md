@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Labels:** `confidential` only rises in the machine layer. Once a provider, rule, triager or plugin has set it to `true`, a later machine
+  write of `false` changes nothing (and logs a warning), and a machine-layer clear, such as a retriage, leaves it in place, so a remote triager
+  never sees the item on the second pass. A person can still lower it in the human layer; clearing that layer brings the `true` back. Dropping a
+  rejected intake item still removes it (`clear_machine(..., drop_confidential=True)`).
+
 ## 1.0.0 (alpha)
 
 The first release of Oaken Core as its own project: the pipeline and plugin loader taken out of oaken-mail and made generic. It replaces the

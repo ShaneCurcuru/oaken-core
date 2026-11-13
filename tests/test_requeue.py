@@ -79,6 +79,14 @@ async def test_retriage_clears_machine_labels_keeps_human_and_goes_to_default(ki
     assert job and job.queue == "default" and job.status == "queued"
 
 
+async def test_retriage_keeps_a_true_confidential_so_the_next_triager_still_sees_it(kit: Kit) -> None:
+    await kit.labels.set("s1", "confidential", "true", SYSTEM)
+    await kit.labels.set("s1", "priority", "low", SYSTEM)
+    jid = await fail_one(kit, "intake.triage", subject="s1")
+    await kit.jobs.requeue(Selector(job_id=jid), USER, retriage=True)
+    assert await kit.labels.all("s1") == {"confidential": "true"}  # it only rises; priority went
+
+
 async def test_retriage_is_for_intake_jobs_only(kit: Kit) -> None:
     jid = await fail_one(kit, "k")
     with pytest.raises(InvalidInput, match="intake"):

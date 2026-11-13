@@ -436,5 +436,5 @@ class Intake:
                 tx, actor=who, subject_id=item.subject_id, key="intake", op="reject",
                 new=json.dumps({"source": item.source, "reason": verdict.reason, "sha256": digest}),
             )  # fmt: skip
-        await self.labels.clear_machine(item.subject_id, who)
+        await self.labels.clear_machine(item.subject_id, who, drop_confidential=True)
         await self.labels.clear_human_all(item.subject_id, who)

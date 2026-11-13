@@ -205,3 +205,46 @@ async def test_a_label_with_writers_is_refused_to_anyone_else_and_a_sweep_leaves
     await labels.clear_machine("s1", Actor("system", "other"))  # a retriage sweep
     assert await labels.get("s1", "send") == "yes"  # the human's value; and the machine's was left too
     assert (await labels.layers("s1", "send")) == {"human": "yes", "machine": "no"}
+
+
+async def test_a_machine_write_cannot_lower_confidential(labels: LabelStore) -> None:
+    rules, triager = Actor("system", "mailrules"), Actor("agent", "llm")
+    assert await labels.set(S, "confidential", "true", rules)
+    for actor in (rules, triager, SYSTEM):  # a rule, a plugin, core: none may lower it
+        assert await labels.set(S, "confidential", "false", actor) is False
+        assert await labels.get(S, "confidential") == "true"
+    assert await labels.layers(S, "confidential") == {"machine": "true"}
+
+
+async def test_a_machine_write_may_raise_confidential(labels: LabelStore) -> None:
+    assert await labels.set(S, "confidential", "false", SYSTEM)  # a provider's default
+    assert await labels.set(S, "confidential", "true", AGENT)  # a triager raises it
+    assert await labels.get(S, "confidential") == "true"
+
+
+async def test_a_person_may_still_lower_confidential_in_the_human_layer(labels: LabelStore) -> None:
+    await labels.set(S, "confidential", "true", SYSTEM)
+    assert await labels.set(S, "confidential", "false", USER)  # the person's decision, logged
+    assert await labels.get(S, "confidential") == "false"
+    assert await labels.clear_human(S, "confidential", USER)  # the unlock: back to the machine's true
+    assert await labels.get(S, "confidential") == "true"
+
+
+async def test_clearing_the_machine_layer_keeps_a_true_confidential(labels: LabelStore) -> None:
+    await labels.set(S, "confidential", "true", SYSTEM)
+    await labels.set(S, "priority", "low", SYSTEM)
+    assert await labels.clear_machine(S, USER) == 1  # a retriage sweep: priority goes, confidential stays
+    assert await labels.clear_machine(S, AGENT, "confidential") == 0  # nor by name
+    assert await labels.all(S) == {"confidential": "true"}
+
+
+async def test_clearing_the_machine_layer_still_drops_a_false_confidential(labels: LabelStore) -> None:
+    await labels.set(S, "confidential", "false", SYSTEM)
+    assert await labels.clear_machine(S, SYSTEM) == 1
+    assert await labels.all(S) == {}
+
+
+async def test_dropping_a_subject_may_remove_a_true_confidential(labels: LabelStore) -> None:
+    await labels.set(S, "confidential", "true", SYSTEM)
+    assert await labels.clear_machine(S, SYSTEM, drop_confidential=True) == 1  # a rejected item leaves nothing
+    assert await labels.all(S) == {}
